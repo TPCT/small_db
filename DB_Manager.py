@@ -26,27 +26,28 @@ class DB_MANAGER:
             __module__ = Exception.__module__
         class InvalidRowData(Exception):
             __module__ = Exception.__module__
+        class OverwritingExistingDB(Exception):
+            __module__ = Exception.__module__
     #<config>
-    __AUTH_PATTERN = r'(?x)(?<=\<auth\>username\=\")[\w\d]{4,}(?=\",password\=\")|(?<=,password\=\").{4,}(?=\"\<\/auth\>)'
+    __AUTH_PATTERN = r'(?x)(?<=\<auth\ username\=\")[\w\d]{4,}(?=\",password\=\")|(?<=,password\=\").{4,}(?=\"\/\>)'
     __DB_FILE_PATTERN = r'(?x)(?<=\<DB\>).*(?=\<\/DB\>)'
     __DB_TABLES_PATTERN = r'(?x)(?<=\<table\>).*?(?=\<\/table\>)'
     __DB_TABLE_NAME_PATTERN = r'(?x)(?<=\<table_name\=\').*?(?=\'\/>)'
     __DB_TABLE_FIELDS_PATTERN = r'(?x)(?<=\<table_fields\=\[).*?(?=\]\/>)'
-    __DB_TABLE_ROWS_PATTERN = r'(?x)(?<=\<row\>).*(?=\<\/row\>)'
-    __TABLE_QUERY = lambda self, table_name, table_fields: "\t<table><table_name='%s'/><table_fields=%s/></table>\n" % (table_name, str(table_fields))
-    __ROW_QUERY = lambda self, values: "\t<row>%s</row>\n" % values
+    __DB_TABLE_ROWS_PATTERN = r'(?x)(?<=\<row\s{1}).*(?=\>)'
+    __TABLE_QUERY = lambda self, table_name, table_fields: "\n<table><table_name='%s'/><table_fields=%s/></table>" % (table_name, str(table_fields))
+    __ROW_QUERY = lambda self, values: "<row %s>" % values
     __Tables_Names, __Tables_Fields, __Tables_Rows = [], [], []
     __DB_FILE = __DB_READER_DECS()
     __DB_FILE_NAME = None
     __Logged = False
     #</config>
     #<imports>
-    from os import path, F_OK, access, R_OK, W_OK, O_RDONLY
+    from os import path, F_OK, access, R_OK, W_OK, O_RDONLY, chmod
     import re
     #</imports>
     def load(self, DB_File, username=None, password=None):
-        if self.path.split(DB_File)[-1].split('.')[-1].lower() != 'db':
-            raise self.__Exceptions.InvalidDB('This Is Not Valid DB File Extension')
+        DB_File = DB_File if DB_File.endswith('.db') else '%s.db' % DB_File
         if self.access(DB_File, self.F_OK | self.R_OK):
             with open(DB_File, 'r+') as db_reader:
                 self.__DB_FILE = self.__Security.Decrypt(db_reader.read())
@@ -60,6 +61,8 @@ class DB_MANAGER:
                 [(self.__Tables_Names.append(self.re.search(self.__DB_TABLE_NAME_PATTERN, table, self.re.DOTALL).group()), self.__Tables_Fields.append(self.re.search(self.__DB_TABLE_FIELDS_PATTERN, table, self.re.DOTALL).group().replace(' ', '').replace("'", '').split(',')), self.__Tables_Rows.append(self.re.findall(self.__DB_TABLE_ROWS_PATTERN, table))) for table in tables]
             except ValueError:
                 raise self.__Exceptions.AuthError("Please enter Valid DB File with this authenitication values") from None
+        else:
+            raise self.__Exceptions.AuthError("Please enter Valid DB File with this authenitication values") from None
     def create_table(self, Table_Name, Table_Fields=[]):
         if self.__Logged and self.__DB_FILE != None:
             if Table_Name not in self.__Tables_Names and Table_Fields:
@@ -73,22 +76,24 @@ class DB_MANAGER:
                     Table_Writer.seek(DB.start())
                     Table_Writer.write(table_query)
                     Table_Writer.write('</DB>')
-                print(self.__DB_FILE)
             else:
                 raise self.__Exceptions.InvalidTable("Either table name is duplicated or empty Fields")
         else:
             raise self.__Exceptions.InvalidDB("Wrong Auth or Wrong DB File")
         pass
     def create_row(self, Table_Name, Values=[]):
-        table_index = self.__Tables_Names.index(Table_Name)
+        try:
+            table_index = self.__Tables_Names.index(Table_Name)
+        except ValueError:
+            raise self.__Exceptions.InvalidTable("This table is either doesn't exists or You are not logged in") from None
         if self.__Logged and table_index != -1:
-            values = '|'.join(Values)
+            values = ','.join([str(x) for x in Values])
             if values in self.__Tables_Rows[table_index]:
                 raise self.__Exceptions.InvalidRowData("This Row Is Duplicated")
             fields = self.__Tables_Fields[table_index]
             if len(Values) == len(fields):
                 row = self.__ROW_QUERY(values)
-                self.__Tables_Rows[self.__Tables_Names.index(Table_Name)].append(row)
+                self.__Tables_Rows[self.__Tables_Names.index(Table_Name)].append(values)
                 table_pos = self.re.search(r'(?x)(?<=\<table\>\<table_name=\'%s\'\/\>).*?(?=\<\/table\>)' % Table_Name, self.__DB_FILE, self.re.DOTALL)
                 with open(self.__DB_FILE_NAME, 'r+') as Row_Writer:
                     Row_Writer.seek(table_pos.end())
@@ -100,27 +105,88 @@ class DB_MANAGER:
         else:
             raise self.__Exceptions.InvalidTable('This Table either not exists or You are not logged')
     def get_table(self, Table_Name):
-        table_index = self.__Tables_Names.index(Table_Name)
+        try:
+            table_index = self.__Tables_Names.index(Table_Name)
+        except ValueError:
+            raise self.__Exceptions.InvalidTable("This table is either doesn't exists or You are not logged in") from None
         if self.__Logged and table_index != -1:
             table_fields = self.__Tables_Fields[table_index]
-            table_rows = [x.split('|') for x in self.__Tables_Rows[table_index]]
+            table_rows = [x.split(',') for x in self.__Tables_Rows[table_index]]
             return (table_fields, table_rows)
         else:
             raise self.__Exceptions.InvalidTable('This Table Doesn\'t exists')
     def get_row(self, Table_Name, searching_by={}):
-        table_index = self.__Tables_Names.index(Table_Name)
+        try:
+            table_index = self.__Tables_Names.index(Table_Name)
+        except ValueError:
+            raise self.__Exceptions.InvalidTable("This table is either doesn't exists or You are not logged in") from None
         if self.__Logged and table_index != -1:
             table_fields = self.__Tables_Fields[table_index]
             indeces = [(table_fields.index(x), str(searching_by[x])) for x in searching_by]
             table_rows = self.__Tables_Rows[table_index]
             result = []
             for row in table_rows:
-                mrow = row.split('|')
+                mrow = row.split(',')
                 result += [row] if all([True if mrow[index] == value else False for index, value in indeces]) else []
             return result
         else:
             raise self.__Exceptions.InvalidTable("This table is either doesn't exists or You are not logged in")
+    def delete_table(self, Table_Name):
+        try:
+            table_index = self.__Tables_Names.index(Table_Name)
+        except ValueError:
+            raise self.__Exceptions.InvalidTable("This table is either doesn't exists or You are not logged in") from None
+        if self.__Logged and table_index != -1:
+            del self.__Tables_Names[table_index]
+            del self.__Tables_Rows[table_index]
+            del self.__Tables_Fields[table_index]
+            with open(self.__DB_FILE_NAME, 'r+') as writer:
+                table_pos = self.re.search(r'\<table\>\<table_name\=\'%s\'\/\>.*?\<\/table\>' % Table_Name, self.__DB_FILE, self.re.DOTALL)
+                writer.seek(table_pos.start())
+                writer.write('\f'*len(table_pos.group()))
+                self.__DB_FILE = self.re.sub(r'\<table\>\<table_name\=\'%s\'\/\>.*?\<\/table\>', '', self.__DB_FILE)
+        else:
+            raise self.__Exceptions.InvalidTable("This table is either doesn't exists or You are not logged in") from None
+    def delete_row(self, Table_Name, searching_by={}):
+        try:
+            table_index = self.__Tables_Names.index(Table_Name)
+        except ValueError:
+            raise self.__Exceptions.InvalidTable("This table is either doesn't exists or You are not logged in") from None
+        if self.__Logged and table_index != -1 and searching_by:
+            table_fields = self.__Tables_Fields[table_index]
+            table_rows = self.__Tables_Rows[table_index]
+            indeces = [(table_fields.index(x), str(searching_by[x])) for x in searching_by]
+            for i in range(len(table_rows)):
+                row = table_rows[i]
+                mrow = table_rows[i].split(',')
+                if all([True if mrow[index] == value else False for index, value in indeces]):
+                    self.__Tables_Rows[table_index].remove(row)
+                with open(self.__DB_FILE_NAME, 'r+') as writer:
+                    row_pos = self.re.search(r'\<row %s>' % row, self.__DB_FILE)
+                    writer.seek(row_pos.start())
+                    writer.write('\f'*len(row_pos.group()))
+                    self.__DB_FILE = self.re.sub(r'(<row %s>)' % row, '', self.__DB_FILE)
+        else:
+            raise self.__Exceptions.InvalidTable("This table is either doesn't exists or you are not logged in or you Null searcing pointer")
+    def create_db(self, DB_FILE, username, password):
+        if not self.path.isfile(DB_FILE if DB_FILE.endswith('.db') else '%s.db' % DB_FILE):
+            DB_FILE = DB_FILE if DB_FILE.endswith('.db') else '%s.db' % DB_FILE
+            with open(DB_FILE, 'w+') as DB_writer:
+                DB_writer.write('<auth username="%s",password="%s"/>\n<DB></DB>' % (username, password))
+                self.chmod(DB_FILE, 777)
+        else:
+            raise self.__Exceptions.OverwritingExistingDB('You Are Trying To Overwrite existing database')
     def __init__(self, DB_FILE=None, username=None, password=None):
         self.__username, self.__password = username, password
         if DB_FILE:
             self.load(DB_FILE, username, password)
+
+if __name__ == '__main__':
+    users_DB = DB_MANAGER()
+    users_DB.create_db('FLASK_APP', 'root', 'toor')
+    users_DB.load('FLASK_APP', 'root', 'toor')
+    users_DB.create_table('Users', ['ID', 'USERNAME', 'PASSWORD', 'FLAG'])
+    users_DB.create_row('Users', ['0', 'ISLAM', 'Th3@Professional', None])
+    users_DB.create_table('Admin', ['ID', 'Username', 'Password', 'New_FLAG'])
+    users_DB.create_row('Admin', ['0', 'Nancy', 'Th3@Professional', 'MAX'])
+    users_DB.delete_row('Users', {'ID': 0, 'PASSWORD': 'Th3@Professional'})
