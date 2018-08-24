@@ -111,10 +111,10 @@ class Small_DB:
             Small_DB.Thread_Locker.acquire()
             with open(self.__file_name, 'rb+') as writer:
                 writer.seek(Small_DB.Auth_len + self.__seek[0][0])
-                data = writer.read()[self.__seek[0][1]:]
-                print(writer.tell())    
-                from os import remove
-                remove('UsersD.db')
+                data = writer.read()[self.__seek[0][1] - self.__seek[0][0]:]
+                writer.truncate(Small_DB.Auth_len + self.__seek[0][0])
+                writer.seek(Small_DB.Auth_len + self.__seek[0][0])
+                writer.write(data)
             Small_DB.DB_FILE = Small_DB.DB_FILE[:self.__seek[1][0]] + Small_DB.DB_FILE[self.__seek[1][1]:]
             Small_DB.Encrypted_File = Small_DB.Encrypted_File[:self.__seek[0][0]] + Small_DB.Encrypted_File[self.__seek[0][1]:]
             Small_DB.Thread_Locker.release()
@@ -132,7 +132,7 @@ class Small_DB:
     __DB_TABLES_PATTERN = r'(?s)(?<=\<table n\=\").{1,255}?(?=\")|(?<=f\=\[).*?(?=\])|(?<=\]\>).*?(?=\<\/table\>)'
     __DB_TABLE_ROWS_PATTERN = r'(?s)(?<=\<row\>).*?(?=\<\/row\>)'
     __TABLE_QUERY = lambda self, table_name, table_fields: '\n<table n="%s",f=%s></table>' % (table_name, str(table_fields).replace('"', '').replace("'", '').replace(' ', ''))
-    __ROW_QUERY = lambda self, values: "\r\n<row>%s</row>" % values
+    __ROW_QUERY = lambda self, values: "\n\t<row>%s</row>" % values
     __Tables_Names, __Tables_Fields, __Tables_Rows = list(), list(), list()
     __Logged = False
     @classmethod
@@ -178,7 +178,7 @@ class Small_DB:
                     self.__Tables_Rows.append([])
                     data = x[2].replace('</table>', '')
                     for row in data.split('\n'):
-                        row = self.re.sub(r'<row>(.*)</row>', r'\1', row).replace('\r', '').split(',')
+                        row = self.re.sub(r'<row>(.*)</row>', r'\1', row).replace('\t', '').split(',')
                         if all(row):
                             row = self.row_dict(zip(fields, row))
                             self.__Tables_Rows[-1].append(row)
@@ -214,7 +214,7 @@ class Small_DB:
             enc_pos = table_pos.end()
             thread = self.ThreadWriter(row, (enc_pos, dec_pos))
             [thread.join() for thread in self.Threads_Container]
-            self.__Tables_Rows[table_index].append(Values)
+            self.__Tables_Rows[table_index].append(self.row_dict(zip(table_fields, Values)))
         else:
             raise self.DBException('Either Invalid Auth or Wrong Table Name or Wrong Values')
     def get_table(self, Table_Name):
@@ -253,53 +253,31 @@ class Small_DB:
             table_pos = self.re.search('(?s)%s' % encrypted_pattern, self.Encrypted_File, self.re.DOTALL | self.re.MULTILINE)
             enc_pos = table_pos.start(), table_pos.end()
             self.Delete_Thread((enc_pos, dec_pos))
+            [thread.join() for thread in self.Threads_Container]
         else:
             raise self.DBException("This table is either doesn't exists or You are not logged in") from None
-
-users = Small_DB()
-from string import ascii_letters
-from random import choice
-from os import remove
-#users_ = [''.join([choice(ascii_letters) for i in range(15)]) for i in range(100)]
-#users_ = list(set(users_))
-users.create_db('UsersD.db', 'root', 'toor')
-users.Load('UsersD.db', 'root', 'toor')
-users.create_table('Admin', ['ID', 'NAME'])
-users.create_table('face', ['ID', 'NAME'])
-users.delete_table('Admin')
-'''
-users.create_row('face', ['Iasd', "aad"])
-users.create_table('Users', ['Username', 'Password'])
-users.create_row('Users', ['Mohamed', 'Th3@Professional'])
-users.create_table('Admin', ['Username', 'Password'])
-users.create_row('Admin', ['I love', 'Nancy'])
-'''
-#print(users.DB_FILE)
-#users.delete_table('Users')
-
-#users.create_table('Users', ['ID', 'Name'])
-#for i in range(len(users_)):
-#    print(i)
-#    users.create_row('Users', [i, users_[i]])
-#users.create_row('face', ['ID', "NAmae"])
-#users.create_table('admin', ['ID', 'NAME'])
-#users.create_table('Aimo', ['ID', 'NAME'])
-
-from threading import Thread, Lock
-Thread_Locker = Lock()
-class ThreadWriter(Thread):
-    def __init__(self, File_Name, Text, Seeking):
-        self.__File_Name = File_Name
-        self.__Text = Text
-        self.__Seeking = Seeking
-        Thread.__init__(self)
-        Thread.start(self)
-
-    def run(self):
-        with open(self.__File_Name, 'r+') as writer:
-            writer.seek(self.__Seeking)
-            forward_text = writer.read()
-            writer.truncate()
-            writer.seek(self.__Seeking)
-            writer.write(self.__Text + forward_text)
-            writer.flush()
+    def delete_row(self, Table_Name, search):
+        table_index = self.__Tables_Names.index(Table_Name)
+        if self.__Logged and table_index >= 0 and isinstance(search, dict):
+            table_fields = self.__Tables_Fields[table_index]
+            table_rows = self.__Tables_Rows[table_index]
+            indeces = [(x, str(search[x])) for x in search]
+            main_row = None
+            for main_index, row in enumerate(table_rows):
+                if all([True if row[index] == value else False for index, value in indeces]):
+                    main_row = row
+                    del self.__Tables_Rows[table_index][main_index]
+                    break
+            if main_row is not None:
+                pattern = '(?s)\n\t\<row\>%s\<\/row\>' % ','.join(list(main_row.values()))
+                table_pos = self.re.search(pattern, self.DB_FILE, self.re.DOTALL)
+                dec_pos = table_pos.start(), table_pos.end()
+                encrypted_pattern = self.Security.Encrypt(table_pos.group(), 9, self.Locker).encode().hex()
+                table_pos = self.re.search('(?s)%s' % encrypted_pattern, self.Encrypted_File, self.re.DOTALL | self.re.MULTILINE)
+                enc_pos = table_pos.start(), table_pos.end()
+                self.Delete_Thread((enc_pos, dec_pos))
+                [thread.join() for thread in self.Threads_Container]
+            else:
+                raise self.DBException('This Row Cann\'t Be Found')
+        else:
+            raise self.DBException('Either Not Logged or Wrong Searching Data or Table Name Doesn\'nt exists')
